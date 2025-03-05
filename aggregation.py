@@ -34,76 +34,129 @@ class LFD():
         ds1 = n1/m * (1 - np.mean(mincs1))
         return ds0, ds1
 
-    def aggregate_mild(self, global_model, local_models, ptypes):
-        local_weights = [copy.deepcopy(model.state_dict()) for model in local_models]
-    m = len(local_models)
-    for i in range(m):
-        local_models[i] = list(local_models[i].parameters())
-    global_model = list(global_model.parameters())
-    dw = [None for i in range(m)]
-    db = [None for i in range(m)]
-    for i in range(m):
-        dw[i] = 1 - cosine_similarity(local_models[i].cpu().data.numpy(), global_model.cpu().data.numpy())
-        db[i] = global_model[-1].cpu().data.numpy() - local_models[i][-1].cpu().data.numpy()
-    dw = np.asarray(dw)
-    db = np.asarray(db)
+    import copy
+import enum
+import torch
+import numpy as np
+import math
+from scipy import stats
+from functools import reduce
+import time
+import sklearn.metrics.pairwise as smp
+#import hdbscan
+from scipy.spatial.distance import cdist
+from scipy.stats import entropy
+from sklearn.cluster import KMeans
+from utils import *
 
-    # 如果是单类或双类分类模型
-    if len(db[0]) <= 2:
+
+eps = np.finfo(float).eps
+
+class LFD():
+    def __init__(self, num_classes):
+        self.memory = np.zeros([num_classes])
+    
+    def clusters_dissimilarity(self, clusters, centers):
+        n0 = len(clusters[0])
+        n1 = len(clusters[1])
+        m = n0 + n1 
+        cs0 = smp.cosine_similarity(clusters[0])
+        cs1 = smp.cosine_similarity(clusters[1])
+        mincs0 = np.min(cs0, axis=1)
+        mincs1 = np.min(cs1, axis=1)
+        ds0 = n0/m * (1 - np.mean(mincs0))
+        ds1 = n1/m * (1 - np.mean(mincs1))
+        return ds0, ds1
+
+    def aggregate_mild(self, global_model, local_models, ptypes):
+        local_weights = [copy.deepcopy(model).state_dict() for model in local_models]
+        m = len(local_models)
+        for i in range(m):
+            local_models[i] = list(local_models[i].parameters())
+        global_model = list(global_model.parameters())
+        dw = [None for i in range(m)]
+        db = [None for i in range(m)]
+        for i in range(m):
+            dw[i]= global_model[-2].cpu().data.numpy() - \
+                local_models[i][-2].cpu().data.numpy() 
+            
+            #print(dw[i])
+            #print("next db")
+            
+            
+            db[i]= global_model[-1].cpu().data.numpy() - \
+                local_models[i][-1].cpu().data.numpy()
+            
+            #print(db[i])
+        dw = np.asarray(dw)
+        #print(dw)
+        #print("next db")
+        db = np.asarray(db)
+        #print(db)
+
+        "If one class or two classes classification model"
+        if len(db[0]) <= 2:
+            data = []
+            for i in range(m):
+                data.append(dw[i].reshape(-1))
+        
+            kmeans = KMeans(n_clusters=2, random_state=0).fit(data)
+            labels = kmeans.labels_
+
+            clusters = {0:[], 1:[]}
+            for i, l in enumerate(labels):
+                clusters[l].append(data[i])
+
+            good_cl = 0
+            cs0, cs1 = self.clusters_dissimilarity(clusters, kmeans.cluster_centers_)
+            if cs0 < cs1:
+                good_cl = 1
+
+            # print('Cluster 0 weighted variance', cs0)
+            # print('Cluster 1 weighted variance', cs1)
+            # print('Potential good cluster is:', good_cl)
+            scores = np.ones([m])
+            for i, l in enumerate(labels):
+                # print(ptypes[i], 'Cluster:', l)
+                if l != good_cl:
+                    scores[i] = 0
+                
+            global_weights = average_weights(local_weights, scores)
+            return global_weights
+
+        "For multiclassification models"
+        norms = np.linalg.norm(dw, axis = -1) 
+        self.memory = np.sum(norms, axis = 0)
+        self.memory +=np.sum(abs(db), axis = 0)
+        max_two_freq_classes = self.memory.argsort()[-2:]
+        #print('Potential source and target classes:', max_two_freq_classes)
         data = []
         for i in range(m):
-            data.append(dw[i].reshape(-1))
+            data.append(dw[i][max_two_freq_classes].reshape(-1))
 
-        classifier = RandomForestClassifier(n_estimators=100, random_state=0)
-        classifier.fit(data, ptypes)
-        labels = classifier.predict(data)
+        kmeans = KMeans(n_clusters=2, random_state=0).fit(data)
+        labels = kmeans.labels_
 
-        clusters = {0: [], 1: []}
+        clusters = {0:[], 1:[]}
         for i, l in enumerate(labels):
-            clusters[l].append(data[i])
+          clusters[l].append(data[i])
 
         good_cl = 0
-        cs0, cs1 = self.clusters_dissimilarity(clusters, classifier)
+        cs0, cs1 = self.clusters_dissimilarity(clusters, kmeans.cluster_centers_)
         if cs0 < cs1:
             good_cl = 1
 
+        # print('Cluster 0 weighted variance', cs0)
+        # print('Cluster 1 weighted variance', cs1)
+        # print('Potential good cluster is:', good_cl)
         scores = np.ones([m])
         for i, l in enumerate(labels):
+            # print(ptypes[i], 'Cluster:', l)
             if l != good_cl:
                 scores[i] = 0
-
+            
         global_weights = average_weights(local_weights, scores)
         return global_weights
-
-    # 对于多分类模型
-    norms = np.linalg.norm(dw, axis=-1)
-    self.memory = np.sum(norms, axis=0)
-    self.memory += np.sum(abs(db), axis=0)
-    max_two_freq_classes = self.memory.argsort()[-2:]
-    data = []
-    for i in range(m):
-        data.append(dw[i][max_two_freq_classes].reshape(-1))
-
-    classifier = RandomForestClassifier(n_estimators=100, random_state=0)
-    classifier.fit(data, ptypes)
-    labels = classifier.predict(data)
-
-    clusters = {0: [], 1: []}
-    for i, l in enumerate(labels):
-        clusters[l].append(data[i])
-
-    good_cl = 0
-    cs0, cs1 = self.clusters_dissimilarity(clusters, classifier)
-    if cs0 < cs1:
-        good_cl = 1
-
-    scores = np.ones([m])
-    for i, l in enumerate(labels):
-        if l != good_cl:
-            scores[i] = 0
-
-    global_weights = average_weights(local_weights, scores)
-    return global_weights
 
     def aggregate_extreme(self, global_model, local_models, minimum_cluster_size, peers_types):
         m = len(local_models)
