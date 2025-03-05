@@ -2,42 +2,6 @@ import copy
 import enum
 import torch
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics.pairwise import cosine_similarity
-import math
-from scipy import stats
-from functools import reduce
-import time
-import sklearn.metrics.pairwise as smp
-import hdbscan
-from scipy.spatial.distance import cdist
-from scipy.stats import entropy
-from sklearn.cluster import KMeans
-from utils import *
-
-
-eps = np.finfo(float).eps
-
-class LFD():
-    def __init__(self, num_classes):
-        self.memory = np.zeros([num_classes])
-    
-    def clusters_dissimilarity(self, clusters, centers):
-        n0 = len(clusters[0])
-        n1 = len(clusters[1])
-        m = n0 + n1 
-        cs0 = smp.cosine_similarity(clusters[0])
-        cs1 = smp.cosine_similarity(clusters[1])
-        mincs0 = np.min(cs0, axis=1)
-        mincs1 = np.min(cs1, axis=1)
-        ds0 = n0/m * (1 - np.mean(mincs0))
-        ds1 = n1/m * (1 - np.mean(mincs1))
-        return ds0, ds1
-
-    import copy
-import enum
-import torch
-import numpy as np
 import math
 from scipy import stats
 from functools import reduce
